@@ -2,6 +2,7 @@
 open System
 open System.Runtime.CompilerServices
 
+
 type IError = 
     abstract member GetErrorMessage: unit -> string
 
@@ -78,10 +79,10 @@ module Parser =
         member x.ApplyTo f = f x.F1.F1.F1.F1 x.F1.F1.F1.F2 x.F1.F1.F2 x.F1.F2 x.F2
 
     type Parser<'tok, 'value> = delegate of byref<UnsafeParserStream<'tok>> * outref<'value> -> unit
-    type Pipeline<'tok, 'a, 'b> = delegate of byref<UnsafeParserStream<'tok>> * outref<ArgumentHolder<'a, 'b>> -> unit
-    type Pipeline<'tok, 'a, 'b, 'c> = delegate of byref<UnsafeParserStream<'tok>> * outref<ArgumentHolder<'a, 'b, 'c>> -> unit
-    type Pipeline<'tok, 'a, 'b, 'c, 'd> = delegate of byref<UnsafeParserStream<'tok>> * outref<ArgumentHolder<'a, 'b, 'c, 'd>> -> unit
-    type Pipeline<'tok, 'a, 'b, 'c, 'd, 'e> = delegate of byref<UnsafeParserStream<'tok>> * outref<ArgumentHolder<'a, 'b, 'c, 'd, 'e>> -> unit
+    type Pipeline<'tok, 'a, 'b> = Parser<'tok, ArgumentHolder<'a, 'b>>
+    type Pipeline<'tok, 'a, 'b, 'c> = Parser<'tok, ArgumentHolder<'a, 'b, 'c>>
+    type Pipeline<'tok, 'a, 'b, 'c, 'd> = Parser<'tok, ArgumentHolder<'a, 'b, 'c, 'd>>
+    type Pipeline<'tok, 'a, 'b, 'c, 'd, 'e> = Parser<'tok, ArgumentHolder<'a, 'b, 'c, 'd, 'e>>
     type P<'tok, 'value> = unit -> Parser<'tok, 'value>
     
     type Constructor<'t> = delegate of unit -> 't
@@ -234,14 +235,23 @@ module Parser =
 
     type Mutator<'s, 'c when 's : struct> = delegate of byref<'s> -> byref<'c>
     
+    type Default3 =
+        class end
+    type Default2 =
+        class inherit Default3 end
+    type Default1 = class inherit Default2 end
+    
+        
     type PH =
-        class end 
+        class inherit Default1 end
+        
         
 
     type PC =
         inherit PH
-        static member inline (?<-)(_:PC, p1: P<'t,'a>, p2: P<'t,'b>) =
-            fun () ->
+        
+        static member inline (?<-)(_:PC, [<Inl>] p1: P< ^t,^a>, [<Inl>] p2: P< ^t,^b>) =
+            //fun () ->
                 Pipeline<'t, 'a, 'b>
                     (fun stream v ->
                         let initialPosition = stream.Position
@@ -250,14 +260,14 @@ module Parser =
                             (p2()).Invoke(&stream, &v.F2)
                             if stream.Status <> Status.Success then 
                                 if stream.Position <> initialPosition then
-                                    stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>)) 
+                                    stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>))
 
-        static member inline (?<-)(_:PC, p1: unit -> Pipeline<'t, 'a, 'b>, p2: P<'t, 'c>) =
-            fun () ->
+        static member inline (?<-)(_:PC, [<Inl>] p1:  Pipeline< ^t, ^a, ^b>, [<Inl>] p2: P< ^t, ^c>) =
+            //fun () ->
                 Pipeline<'t, 'a, 'b, 'c>
                     (fun stream v ->
                         let initialPosition = stream.Position
-                        (p1()).Invoke(&stream, &v.F1)
+                        (p1).Invoke(&stream, &v.F1)
                         if stream.Status = Status.Success then
                             (p2()).Invoke(&stream, &v.F2)
                             if stream.Status <> Status.Success then 
@@ -265,69 +275,70 @@ module Parser =
                                     stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>)) 
 
         
-        static member inline (?<-)(_:PC, p1: unit -> Pipeline<'t, 'a, 'b, 'c>, p2: P<'t, 'd>) =
-            fun () ->
+        static member inline (?<-)(_:PC, [<Inl>] p1: Pipeline< ^t, ^a, ^b, ^c>, [<Inl>] p2: P< ^t, ^d>) =
+            //fun () ->
                 Pipeline<'t, 'a, 'b, 'c, 'd>
                     (fun stream v ->
                         let initialPosition = stream.Position
-                        (p1()).Invoke(&stream, &v.F1)
+                        (p1).Invoke(&stream, &v.F1)
                         if stream.Status = Status.Success then
                             (p2()).Invoke(&stream, &v.F2)
                             if stream.Status <> Status.Success then 
                                 if stream.Position <> initialPosition then
                                     stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>)) 
     
-        static member inline (?<-)(_:PC, p1: unit -> Pipeline<'t, 'a, 'b, 'c, 'd>, p2: P<'t, 'e>) =
-            fun () ->
+        static member inline (?<-)(_:PC, [<Inl>] p1: Pipeline< ^t, ^a, ^b, ^c, ^d>, [<Inl>] p2: P< ^t, ^e>) =
+            //fun () ->
                 Pipeline<'t, 'a, 'b, 'c, 'd, 'e>
                     (fun stream v ->
                         let initialPosition = stream.Position
-                        (p1()).Invoke(&stream, &v.F1)
+                        (p1).Invoke(&stream, &v.F1)
                         if stream.Status = Status.Success then
                             (p2()).Invoke(&stream, &v.F2)
                             if stream.Status <> Status.Success then 
                                 if stream.Position <> initialPosition then
                                     stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>)) 
     
-        static member inline (?<-)(_:PC, p1: unit -> Pipeline<'t, 'a, 'b>, f: 'a -> 'b -> 'c) =
+        static member inline (?<-)(_:PC, p1:  Pipeline< ^t, ^a, ^b>, f) =
             fun () ->
                 Parser<'t, 'c>
                     (fun stream v ->
                         let mutable i = Unchecked.defaultof<_>
-                        (p1()).Invoke(&stream, &i)
+                        (p1).Invoke(&stream, &i)
                         if stream.Status = Status.Success then
                             v <- i.ApplyTo f)
                     
-        static member inline (?<-)(_:PC, p1: unit -> Pipeline<'t, 'a, 'b, 'c>, f: 'a -> 'b -> 'c -> 'd) =
+        static member inline (?<-)(_:PC, p1:  Pipeline< ^t, ^a, ^b, ^c>, f) =
             fun () ->
                 Parser<'t, 'd>
                     (fun stream v ->
                         let mutable i = Unchecked.defaultof<_>
-                        (p1()).Invoke(&stream, &i)
+                        (p1).Invoke(&stream, &i)
                         if stream.Status = Status.Success then
                             v <- i.ApplyTo f)
                     
-        static member inline (?<-)(_:PC, p1: unit -> Pipeline<'t, 'a, 'b, 'c, 'd>, f: 'a -> 'b -> 'c -> 'd ->'e) =
+        static member inline (?<-)(_:PC, p1:  Pipeline< ^t, ^a, ^b, ^c, ^d>, f) =
             fun () ->
                 Parser<'t, 'e>
                     (fun stream v ->
                         let mutable i = Unchecked.defaultof<_>
-                        (p1()).Invoke(&stream, &i)
+                        (p1).Invoke(&stream, &i)
                         if stream.Status = Status.Success then
                             v <- i.ApplyTo f)
-        static member inline (?<-)(_:PC, p1: unit -> Pipeline<'t, 'a, 'b, 'c, 'd, 'e>, f: 'a -> 'b -> 'c -> 'd ->'e -> 'f) =
+        static member inline (?<-)(_:PC, p1:  Pipeline< ^t, ^a, ^b, ^c, ^d, ^e>, f) =
             fun () ->
                 Parser<'t, 'f>
                     (fun stream v ->
                         let mutable i = Unchecked.defaultof<_>
-                        (p1()).Invoke(&stream, &i)
+                        (p1).Invoke(&stream, &i)
                         if stream.Status = Status.Success then
                             v <- i.ApplyTo f)
                     
-    let inline (<*>) ([<Inl>] p1) ([<Inl>] p2) =
-        (?<-) Unchecked.defaultof<PC> p1 p2
-
-        
+    let inline (<*>) ( p1) ([<Inl>] p2: P< ^t, _>) =
+        (?<-) Unchecked.defaultof<PC> (p1) p2
+    
+    let inline (|->) ( p) ( f) =
+        (?<-) Unchecked.defaultof<PC> ( p) f
 
     let inline eq a b = (# "ceq" a b : bool #)
 //    type 
@@ -364,7 +375,11 @@ module Parser =
     
     let loh = char 'l' <+ char 'o' <+ char 'h' |>> (fun c -> [c; c; c; c;c])
     
-    let loh2 = char 'k' <*> char 'l' <*> char 'o' 
+    let inline loh2 () =
+        char 'k' <*> char 'l' <*> char 'o' <*> (char '1' |>> (fun c -> int c - int '0' ))
+
+       
+
     
     let b = map2 (matchAndReturn  (Eq<_>(=)) 'l' 10) (matchAndReturn  (Eq<_>(=)) 'o' 5) (fun a b -> a * b)
     let c = map (fun c -> c.ToString()) (map2 a1 a2 (*))
