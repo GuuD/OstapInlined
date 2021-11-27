@@ -66,7 +66,7 @@ module Parser =
     type ArgumentHolder<'t1, 't2> =
         val mutable F1: 't1
         val mutable F2: 't2
-        member x.ApplyTo (f) = f x.F1 x.F2
+        member inline x.ApplyTo ([<Inl>] f) = f x.F1 x.F2
         interface IArgs<'t1, 't2> with
             override x.ApplyTo  f = x.ApplyTo f
 
@@ -75,7 +75,7 @@ module Parser =
     type ArgumentHolder<'t1, 't2, 't3> =
         val mutable F1: ArgumentHolder<'t1, 't2>
         val mutable F2: 't3
-        member x.ApplyTo f = f x.F1.F1 x.F1.F2 x.F2
+        member inline x.ApplyTo ([<Inl>] f) = f x.F1.F1 x.F1.F2 x.F2
         interface IArgs<'t1, 't2, 't3> with
             override x.ApplyTo f = x.ApplyTo f
 
@@ -84,7 +84,7 @@ module Parser =
     type ArgumentHolder<'t1, 't2, 't3, 't4> =
         val mutable F1: ArgumentHolder<'t1, 't2, 't3>
         val mutable F2: 't4
-        member x.ApplyTo f = f x.F1.F1.F1 x.F1.F1.F2 x.F1.F2 x.F2
+        member inline x.ApplyTo ([<Inl>] f) = f x.F1.F1.F1 x.F1.F1.F2 x.F1.F2 x.F2
         interface IArgs<'t1, 't2, 't3, 't4> with
             override x.ApplyTo f = x.ApplyTo f
             
@@ -94,7 +94,7 @@ module Parser =
     type ArgumentHolder<'t1, 't2, 't3, 't4, 't5> =
         val mutable F1: ArgumentHolder<'t1, 't2, 't3, 't4>
         val mutable F2: 't5
-        member x.ApplyTo f = f x.F1.F1.F1.F1 x.F1.F1.F1.F2 x.F1.F1.F2 x.F1.F2 x.F2
+        member inline x.ApplyTo ([<Inl>] f) = f x.F1.F1.F1.F1 x.F1.F1.F1.F2 x.F1.F1.F2 x.F1.F2 x.F2
         interface IArgs<'t1, 't2, 't3, 't4, 't5> with
             override x.ApplyTo f = x.ApplyTo f
 
@@ -309,52 +309,14 @@ module Parser =
                             if stream.Position <> initialPosition then
                                 stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>))
     
-    type PipeConsumer =
-        inherit Default1
-        
-        static member inline Apply(f: 'a -> 'b -> 'c, args: ArgumentHolder<'a, 'b>) =
-            args.ApplyTo f
-        static member inline Apply(f: 'a -> 'b -> 'c -> 'd, args: ArgumentHolder<'a, 'b,'c>) =
-            args.ApplyTo f
-        static member inline Apply(f: 'a -> 'b -> 'c -> 'd -> 'e, args: ArgumentHolder<'a, 'b, 'c, 'd>) =
-            args.ApplyTo f
-        static member inline Apply(f: 'a -> 'b -> 'c -> 'd -> 'e -> 'f, args: ArgumentHolder<'a, 'b, 'c, 'd, 'e>) =
-            args.ApplyTo f
-        static member inline (?<-) ([<Inl>]  pipe: unit -> Pipeline< ^t, ^a, ^b>, [<Inl>] f, a: PipeConsumer) =
-            fun () ->
-                Parser<_,_>
-                    (fun stream v ->
-                        let mutable vo = Unchecked.defaultof<_>
-                        (pipe()).Invoke(&stream, &vo)
-                        if stream.Status = Status.Success then v <- vo.ApplyTo f)
-        static member inline (?<-) ([<Inl>]  pipe: unit -> Pipeline< ^t, ^a, ^b, ^c>, [<Inl>] f, a: PipeConsumer) =
-            fun () ->
-                Parser<_,_>
-                    (fun stream v ->
-                        let mutable vo = Unchecked.defaultof<_>
-                        (pipe()).Invoke(&stream, &vo)
-                        if stream.Status = Status.Success then v <- vo.ApplyTo f)
-        static member inline (?<-) ([<Inl>]  pipe: unit -> Pipeline< ^t, ^a, ^b, ^c, ^d>, [<Inl>] f, a: PipeConsumer) =
-            fun () ->
-                Parser<_,_>
-                    (fun stream v ->
-                        let mutable vo = Unchecked.defaultof<_>
-                        (pipe()).Invoke(&stream, &vo)
-                        if stream.Status = Status.Success then v <- vo.ApplyTo f)
-        static member inline (?<-) ([<Inl>]  pipe: unit -> Pipeline< ^t, ^a, ^b, ^c, ^d, ^e>, [<Inl>] f, a: PipeConsumer) =
-            fun () ->
-                Parser<_,_>
-                    (fun stream v ->
-                        let mutable vo = Unchecked.defaultof<_>
-                        (pipe()).Invoke(&stream, &vo)
-                        if stream.Status = Status.Success then v <- vo.ApplyTo f)
-    let inline (|->) ([<Inl>] p: unit -> Parser< ^t, ^a> when ^a : (member ApplyTo: ^b -> ^c))  f =
+
+    let inline (|->) ([<Inl>] p: unit -> Parser< ^t, ^a> when ^a : (member ApplyTo: (^b -> ^c) -> ^d)) ([<Inl>] f: ^b -> ^c) =
         fun () ->
             Parser<_,_>
                 (fun stream v ->
                     let mutable vo = Unchecked.defaultof<_>
                     (p()).Invoke(&stream, &vo)
-                    if stream.Status = Status.Success then v <- (^a : (member ApplyTo: ^b -> ^c)(vo, f)))
+                    if stream.Status = Status.Success then v <- (^a : (member ApplyTo: (^b -> ^c) -> ^d)(vo, f)))
 
             
     let inline (<+>) ([<Inl>] p1) ([<Inl>] p2) =
@@ -367,7 +329,7 @@ module Parser =
     let inline a2 () = matchAndReturn  (Eq<_>eq) 'o' 2 ()
     let inline a3 () = matchAndReturn  (Eq<_>eq) 'h' 3 ()
     
-    let firstLetter = a1 <|> a2 <|> a3
+    let inline firstLetter () = (a1 <|> a2 <|> a3)()
     
     
     
@@ -378,10 +340,10 @@ module Parser =
 //    let inline loh2 () =
 //        char 'k' <*> char 'l' <*> char 'o' <*> (char '1' |>> (fun c -> int c - int '0' ))
 
-    let loh3 =
-        char 'a' +> a1 <+ char 'b' <+> char 'b' <+> (char '1' |>> (fun c -> int c - int '0' ))
-        |-> fun a b c  -> a + c
-        
+    let inline loh3 () =
+        (char 'a' +> a1 <+ char 'b' <+> firstLetter <+> (char '1' |>> (fun c -> int c - int '0' ))
+        |-> fun a b c  -> a + c + b
+        |>> (fun r -> 7 * r))()
 
     
     let b = map2 (matchAndReturn  (Eq<_>(=)) 'l' 10) (matchAndReturn  (Eq<_>(=)) 'o' 5) (fun a b -> a * b)
