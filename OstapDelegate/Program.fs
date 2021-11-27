@@ -3,6 +3,7 @@ open System
 open System.Runtime.CompilerServices
 
 
+
 type IError = 
     abstract member GetErrorMessage: unit -> string
 
@@ -50,12 +51,23 @@ module Parser =
             else false
             
         member inline x.CurrentStream = x.Stream.Slice(x.Position)
-    
+    type Inl = InlineIfLambdaAttribute
+    type IArgs<'t1, 't2> =
+        abstract member ApplyTo<'r> : ('t1 -> 't2 -> 'r) -> 'r
+    type IArgs<'t1, 't2, 't3> = 
+        abstract member ApplyTo<'r> : ('t1 -> 't2 -> 't3 -> 'r) -> 'r
+    type IArgs<'t1, 't2, 't3, 't4> =  
+        abstract member ApplyTo<'r> : ('t1 -> 't2 -> 't3 -> 't4 -> 'r) -> 'r
+    type IArgs<'t1, 't2, 't3, 't4, 't5> =
+        abstract member ApplyTo<'r> : ('t1 -> 't2 -> 't3 -> 't4 -> 't5 -> 'r) -> 'r
+        
     [<Struct; NoComparison; NoEquality>]   
     type ArgumentHolder<'t1, 't2> =
         val mutable F1: 't1
         val mutable F2: 't2
-        member x.ApplyTo f = f x.F1 x.F2
+        member x.ApplyTo (f) = f x.F1 x.F2
+        interface IArgs<'t1, 't2> with
+            override x.ApplyTo  f = x.ApplyTo f
 
         
     [<Struct; NoComparison; NoEquality>]   
@@ -63,6 +75,8 @@ module Parser =
         val mutable F1: ArgumentHolder<'t1, 't2>
         val mutable F2: 't3
         member x.ApplyTo f = f x.F1.F1 x.F1.F2 x.F2
+        interface IArgs<'t1, 't2, 't3> with
+            override x.ApplyTo f = x.ApplyTo f
 
         
     [<Struct; NoComparison; NoEquality>]   
@@ -70,6 +84,8 @@ module Parser =
         val mutable F1: ArgumentHolder<'t1, 't2, 't3>
         val mutable F2: 't4
         member x.ApplyTo f = f x.F1.F1.F1 x.F1.F1.F2 x.F1.F2 x.F2
+        interface IArgs<'t1, 't2, 't3, 't4> with
+            override x.ApplyTo f = x.ApplyTo f
 
     
     [<Struct; NoComparison; NoEquality>]   
@@ -77,17 +93,23 @@ module Parser =
         val mutable F1: ArgumentHolder<'t1, 't2, 't3, 't4>
         val mutable F2: 't5
         member x.ApplyTo f = f x.F1.F1.F1.F1 x.F1.F1.F1.F2 x.F1.F1.F2 x.F1.F2 x.F2
+        interface IArgs<'t1, 't2, 't3, 't4, 't5> with
+            override x.ApplyTo f = x.ApplyTo f
 
     type Parser<'tok, 'value> = delegate of byref<UnsafeParserStream<'tok>> * outref<'value> -> unit
     type Pipeline<'tok, 'a, 'b> = Parser<'tok, ArgumentHolder<'a, 'b>>
     type Pipeline<'tok, 'a, 'b, 'c> = Parser<'tok, ArgumentHolder<'a, 'b, 'c>>
     type Pipeline<'tok, 'a, 'b, 'c, 'd> = Parser<'tok, ArgumentHolder<'a, 'b, 'c, 'd>>
     type Pipeline<'tok, 'a, 'b, 'c, 'd, 'e> = Parser<'tok, ArgumentHolder<'a, 'b, 'c, 'd, 'e>>
+//    type Pipeline<'tok, 'a, 'b> = delegate of byref<UnsafeParserStream<'tok>> * outref<ArgumentHolder<'a, 'b>> -> unit
+//    type Pipeline<'tok, 'a, 'b, 'c> = delegate of byref<UnsafeParserStream<'tok>> * outref<ArgumentHolder<'a, 'b, 'c>> -> unit
+//    type Pipeline<'tok, 'a, 'b, 'c, 'd> = delegate of byref<UnsafeParserStream<'tok>> * outref<ArgumentHolder<'a, 'b, 'c, 'd>> -> unit
+//    type Pipeline<'tok, 'a, 'b, 'c, 'd, 'e> = delegate of byref<UnsafeParserStream<'tok>> * outref<ArgumentHolder<'a, 'b, 'c, 'd, 'e>> -> unit
     type P<'tok, 'value> = unit -> Parser<'tok, 'value>
     
     type Constructor<'t> = delegate of unit -> 't
     type Folder<'res, 'elem> = delegate of 'res * 'elem -> 'res
-    type Inl = InlineIfLambdaAttribute
+
     
 //    type IFunc<'t, 'res> =
 //        abstract member Capture: 
@@ -241,127 +263,95 @@ module Parser =
         class inherit Default3 end
     type Default1 = class inherit Default2 end
     
+    
+        
         
     type PH =
-        class inherit Default1 end
-        
-        
+        inherit Default1
 
-    type PC =
-        inherit PH
-        
-        static member inline (?<-)(_:PC, [<Inl>] p1: P< ^t,^a>, [<Inl>] p2: P< ^t,^b>) =
-            //fun () ->
-                Pipeline<'t, 'a, 'b>
-                    (fun stream v ->
-                        let initialPosition = stream.Position
-                        (p1()).Invoke(&stream, &v.F1)
-                        if stream.Status = Status.Success then
-                            (p2()).Invoke(&stream, &v.F2)
-                            if stream.Status <> Status.Success then 
-                                if stream.Position <> initialPosition then
-                                    stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>))
+        static member inline (?<-)([<Inl>] p1: Pipeline< ^t,  ^a,  ^b>, [<Inl>] p2: Parser< ^t,  ^c>, _: PH) =
+            Pipeline< ^t,  ^a,  ^b,  ^c>
+                (fun stream v ->
+                    let initialPosition = stream.Position
+                    p1.Invoke(&stream, &v.F1)
+                    if stream.Status = Status.Success then
+                        p2.Invoke(&stream, &v.F2)
+                        if stream.Status <> Status.Success then 
+                            if stream.Position <> initialPosition then
+                                stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>)) 
 
-        static member inline (?<-)(_:PC, [<Inl>] p1:  Pipeline< ^t, ^a, ^b>, [<Inl>] p2: P< ^t, ^c>) =
-            //fun () ->
-                Pipeline<'t, 'a, 'b, 'c>
+        static member inline (?<-)([<Inl>] p1:  Pipeline< ^t,  ^a,  ^b,  ^c>, [<Inl>] p2: Parser< ^t,  ^d>, _: PH) =
+            Pipeline< ^t,  ^a,  ^b,  ^c,  ^d>
+                (fun stream v ->
+                    let initialPosition = stream.Position
+                    p1.Invoke(&stream, &v.F1)
+                    if stream.Status = Status.Success then
+                        p2.Invoke(&stream, &v.F2)
+                        if stream.Status <> Status.Success then 
+                            if stream.Position <> initialPosition then
+                                stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>))
+        static member inline (?<-)([<Inl>] p1:  Pipeline< ^t,  ^a,  ^b,  ^c, ^d>, [<Inl>] p2: Parser< ^t,  ^e>, _: PH) =
+            Pipeline< ^t,  ^a,  ^b,  ^c,  ^d, ^e>
+                (fun stream v ->
+                    let initialPosition = stream.Position
+                    p1.Invoke(&stream, &v.F1)
+                    if stream.Status = Status.Success then
+                        p2.Invoke(&stream, &v.F2)
+                        if stream.Status <> Status.Success then 
+                            if stream.Position <> initialPosition then
+                                stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>))
+                    
+    type PH with
+        static member inline (?<-)([<Inl>] p1: Parser< ^t, ^a>, [<Inl>] p2: Parser< ^t,  ^b>, _: Default1) =
+            Pipeline< ^t,  ^a,  ^b>
+                (fun stream v ->
+                    let initialPosition = stream.Position
+                    p1.Invoke(&stream, &v.F1)
+                    if stream.Status = Status.Success then
+                        p2.Invoke(&stream, &v.F2)
+                        if stream.Status <> Status.Success then 
+                            if stream.Position <> initialPosition then
+                                stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>))
+    
+    type PipeConsumer =
+        inherit Default1
+        static member inline (?<-) ([<Inl>]  pipe: unit -> Pipeline< ^t, ^a, ^b>, [<Inl>] f, a: PipeConsumer) =
+            fun () ->
+                Parser<_,_>
                     (fun stream v ->
-                        let initialPosition = stream.Position
-                        (p1).Invoke(&stream, &v.F1)
-                        if stream.Status = Status.Success then
-                            (p2()).Invoke(&stream, &v.F2)
-                            if stream.Status <> Status.Success then 
-                                if stream.Position <> initialPosition then
-                                    stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>)) 
+                        let mutable vo = Unchecked.defaultof<_>
+                        (pipe()).Invoke(&stream, &vo)
+                        if stream.Status = Status.Success then v <- vo.ApplyTo f)
+        static member inline (?<-) ([<Inl>]  pipe: unit -> Pipeline< ^t, ^a, ^b, ^c>, [<Inl>] f, a: PipeConsumer) =
+            fun () ->
+                Parser<_,_>
+                    (fun stream v ->
+                        let mutable vo = Unchecked.defaultof<_>
+                        (pipe()).Invoke(&stream, &vo)
+                        if stream.Status = Status.Success then v <- vo.ApplyTo f)
+        static member inline (?<-) ([<Inl>]  pipe: unit -> Pipeline< ^t, ^a, ^b, ^c, ^d>, [<Inl>] f, a: PipeConsumer) =
+            fun () ->
+                Parser<_,_>
+                    (fun stream v ->
+                        let mutable vo = Unchecked.defaultof<_>
+                        (pipe()).Invoke(&stream, &vo)
+                        if stream.Status = Status.Success then v <- vo.ApplyTo f)
+        static member inline (?<-) ([<Inl>]  pipe: unit -> Pipeline< ^t, ^a, ^b, ^c, ^d, ^e>, [<Inl>] f, a: PipeConsumer) =
+            fun () ->
+                Parser<_,_>
+                    (fun stream v ->
+                        let mutable vo = Unchecked.defaultof<_>
+                        (pipe()).Invoke(&stream, &vo)
+                        if stream.Status = Status.Success then v <- vo.ApplyTo f)
+    let inline (|->) ([<Inl>] p: unit -> ^a)  f =
+        (?<-) (p) (f) Unchecked.defaultof<PipeConsumer>
 
-        
-        static member inline (?<-)(_:PC, [<Inl>] p1: Pipeline< ^t, ^a, ^b, ^c>, [<Inl>] p2: P< ^t, ^d>) =
-            //fun () ->
-                Pipeline<'t, 'a, 'b, 'c, 'd>
-                    (fun stream v ->
-                        let initialPosition = stream.Position
-                        (p1).Invoke(&stream, &v.F1)
-                        if stream.Status = Status.Success then
-                            (p2()).Invoke(&stream, &v.F2)
-                            if stream.Status <> Status.Success then 
-                                if stream.Position <> initialPosition then
-                                    stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>)) 
-    
-        static member inline (?<-)(_:PC, [<Inl>] p1: Pipeline< ^t, ^a, ^b, ^c, ^d>, [<Inl>] p2: P< ^t, ^e>) =
-            //fun () ->
-                Pipeline<'t, 'a, 'b, 'c, 'd, 'e>
-                    (fun stream v ->
-                        let initialPosition = stream.Position
-                        (p1).Invoke(&stream, &v.F1)
-                        if stream.Status = Status.Success then
-                            (p2()).Invoke(&stream, &v.F2)
-                            if stream.Status <> Status.Success then 
-                                if stream.Position <> initialPosition then
-                                    stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>)) 
-    
-        static member inline (?<-)(_:PC, p1:  Pipeline< ^t, ^a, ^b>, f) =
-            fun () ->
-                Parser<'t, 'c>
-                    (fun stream v ->
-                        let mutable i = Unchecked.defaultof<_>
-                        (p1).Invoke(&stream, &i)
-                        if stream.Status = Status.Success then
-                            v <- i.ApplyTo f)
-                    
-        static member inline (?<-)(_:PC, p1:  Pipeline< ^t, ^a, ^b, ^c>, f) =
-            fun () ->
-                Parser<'t, 'd>
-                    (fun stream v ->
-                        let mutable i = Unchecked.defaultof<_>
-                        (p1).Invoke(&stream, &i)
-                        if stream.Status = Status.Success then
-                            v <- i.ApplyTo f)
-                    
-        static member inline (?<-)(_:PC, p1:  Pipeline< ^t, ^a, ^b, ^c, ^d>, f) =
-            fun () ->
-                Parser<'t, 'e>
-                    (fun stream v ->
-                        let mutable i = Unchecked.defaultof<_>
-                        (p1).Invoke(&stream, &i)
-                        if stream.Status = Status.Success then
-                            v <- i.ApplyTo f)
-        static member inline (?<-)(_:PC, p1:  Pipeline< ^t, ^a, ^b, ^c, ^d, ^e>, f) =
-            fun () ->
-                Parser<'t, 'f>
-                    (fun stream v ->
-                        let mutable i = Unchecked.defaultof<_>
-                        (p1).Invoke(&stream, &i)
-                        if stream.Status = Status.Success then
-                            v <- i.ApplyTo f)
-                    
-    let inline (<*>) ( p1) ([<Inl>] p2: P< ^t, _>) =
-        (?<-) Unchecked.defaultof<PC> (p1) p2
-    
-    let inline (|->) ( p) ( f) =
-        (?<-) Unchecked.defaultof<PC> ( p) f
+            
+    let inline (<+>) ([<Inl>] p1) ([<Inl>] p2) =
+        fun () -> (?<-) (p1()) (p2()) Unchecked.defaultof<PH>
 
     let inline eq a b = (# "ceq" a b : bool #)
-//    type 
-//    
-//    type ParserOp = ParserOp with
-//        static member inline Arg1Setter< ^a, ^b when ^a: (member Arg1: ^b)> (s: byref< ^a>, a: outref< ^b>) =
-//            a <- ((^a: (member Arg1: ^b) s))
-//        static member inline (<+>) ([<Inl>] p1: P<'t, 'a>, [<Inl>] p2: P<'t, 'b>) f  = 
-//            fun () ->
-//                Parser<_,_>
-//                    (fun stream v ->
-//                        let initialPosition = stream.Position
-//                        let mutable v1 = Unchecked.defaultof<_>
-//                        (p1()).Invoke(&stream, &v1)
-//                        if stream.Status = Status.Success then
-//                            let mutable v2 = Unchecked.defaultof<_>
-//                            (p2()).Invoke(&stream, &v2)
-//                            if stream.Status = Status.Success then
-//                                v <- f v1 v2
-//                            elif stream.Position <> initialPosition then
-//                                stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>)
-//                            else stream.SignalMiss())
-//   
+
 
     let inline a1 ()  = matchAndReturn (Eq<_>eq) 'l' 1 ()   
     let inline a2 () = matchAndReturn  (Eq<_>eq) 'o' 2 ()
@@ -375,10 +365,13 @@ module Parser =
     
     let loh = char 'l' <+ char 'o' <+ char 'h' |>> (fun c -> [c; c; c; c;c])
     
-    let inline loh2 () =
-        char 'k' <*> char 'l' <*> char 'o' <*> (char '1' |>> (fun c -> int c - int '0' ))
+//    let inline loh2 () =
+//        char 'k' <*> char 'l' <*> char 'o' <*> (char '1' |>> (fun c -> int c - int '0' ))
 
-       
+    let loh3 =
+        char 'a' +> a1 <+ char 'b' <+> char 'b' +> (char '1' |>> (fun c -> int c - int '0' ))
+        |-> fun a b  -> a + b
+        
 
     
     let b = map2 (matchAndReturn  (Eq<_>(=)) 'l' 10) (matchAndReturn  (Eq<_>(=)) 'o' 5) (fun a b -> a * b)
