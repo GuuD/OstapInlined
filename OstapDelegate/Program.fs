@@ -51,6 +51,7 @@ module Parser =
             else false
             
         member inline x.CurrentStream = x.Stream.Slice(x.Position)
+    
     type Inl = InlineIfLambdaAttribute
     type IArgs<'t1, 't2> =
         abstract member ApplyTo<'r> : ('t1 -> 't2 -> 'r) -> 'r
@@ -86,6 +87,7 @@ module Parser =
         member x.ApplyTo f = f x.F1.F1.F1 x.F1.F1.F2 x.F1.F2 x.F2
         interface IArgs<'t1, 't2, 't3, 't4> with
             override x.ApplyTo f = x.ApplyTo f
+            
 
     
     [<Struct; NoComparison; NoEquality>]   
@@ -101,18 +103,12 @@ module Parser =
     type Pipeline<'tok, 'a, 'b, 'c> = Parser<'tok, ArgumentHolder<'a, 'b, 'c>>
     type Pipeline<'tok, 'a, 'b, 'c, 'd> = Parser<'tok, ArgumentHolder<'a, 'b, 'c, 'd>>
     type Pipeline<'tok, 'a, 'b, 'c, 'd, 'e> = Parser<'tok, ArgumentHolder<'a, 'b, 'c, 'd, 'e>>
-//    type Pipeline<'tok, 'a, 'b> = delegate of byref<UnsafeParserStream<'tok>> * outref<ArgumentHolder<'a, 'b>> -> unit
-//    type Pipeline<'tok, 'a, 'b, 'c> = delegate of byref<UnsafeParserStream<'tok>> * outref<ArgumentHolder<'a, 'b, 'c>> -> unit
-//    type Pipeline<'tok, 'a, 'b, 'c, 'd> = delegate of byref<UnsafeParserStream<'tok>> * outref<ArgumentHolder<'a, 'b, 'c, 'd>> -> unit
-//    type Pipeline<'tok, 'a, 'b, 'c, 'd, 'e> = delegate of byref<UnsafeParserStream<'tok>> * outref<ArgumentHolder<'a, 'b, 'c, 'd, 'e>> -> unit
+
     type P<'tok, 'value> = unit -> Parser<'tok, 'value>
     
     type Constructor<'t> = delegate of unit -> 't
     type Folder<'res, 'elem> = delegate of 'res * 'elem -> 'res
 
-    
-//    type IFunc<'t, 'res> =
-//        abstract member Capture: 
     
     type ManyParser<'tok, 'value, 'finalValue>([<Inl>] parser: P<'tok, 'value>,  [<Inl>] folder: Folder<_,_>, [<Inl>] constructor: Constructor<_>, minCount, maxCount) =
         let error = {new IError with member x.GetErrorMessage() = $"Expected no less than {minCount} successfully parsed values. We found less, but input was consumed"}
@@ -315,6 +311,15 @@ module Parser =
     
     type PipeConsumer =
         inherit Default1
+        
+        static member inline Apply(f: 'a -> 'b -> 'c, args: ArgumentHolder<'a, 'b>) =
+            args.ApplyTo f
+        static member inline Apply(f: 'a -> 'b -> 'c -> 'd, args: ArgumentHolder<'a, 'b,'c>) =
+            args.ApplyTo f
+        static member inline Apply(f: 'a -> 'b -> 'c -> 'd -> 'e, args: ArgumentHolder<'a, 'b, 'c, 'd>) =
+            args.ApplyTo f
+        static member inline Apply(f: 'a -> 'b -> 'c -> 'd -> 'e -> 'f, args: ArgumentHolder<'a, 'b, 'c, 'd, 'e>) =
+            args.ApplyTo f
         static member inline (?<-) ([<Inl>]  pipe: unit -> Pipeline< ^t, ^a, ^b>, [<Inl>] f, a: PipeConsumer) =
             fun () ->
                 Parser<_,_>
@@ -343,8 +348,13 @@ module Parser =
                         let mutable vo = Unchecked.defaultof<_>
                         (pipe()).Invoke(&stream, &vo)
                         if stream.Status = Status.Success then v <- vo.ApplyTo f)
-    let inline (|->) ([<Inl>] p: unit -> ^a)  f =
-        (?<-) (p) (f) Unchecked.defaultof<PipeConsumer>
+    let inline (|->) ([<Inl>] p: unit -> Parser< ^t, ^a> when ^a : (member ApplyTo: ^b -> ^c))  f =
+        fun () ->
+            Parser<_,_>
+                (fun stream v ->
+                    let mutable vo = Unchecked.defaultof<_>
+                    (p()).Invoke(&stream, &vo)
+                    if stream.Status = Status.Success then v <- (^a : (member ApplyTo: ^b -> ^c)(vo, f)))
 
             
     let inline (<+>) ([<Inl>] p1) ([<Inl>] p2) =
@@ -369,8 +379,8 @@ module Parser =
 //        char 'k' <*> char 'l' <*> char 'o' <*> (char '1' |>> (fun c -> int c - int '0' ))
 
     let loh3 =
-        char 'a' +> a1 <+ char 'b' <+> char 'b' +> (char '1' |>> (fun c -> int c - int '0' ))
-        |-> fun a b  -> a + b
+        char 'a' +> a1 <+ char 'b' <+> char 'b' <+> (char '1' |>> (fun c -> int c - int '0' ))
+        |-> fun a b c  -> a + c
         
 
     
