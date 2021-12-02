@@ -6,7 +6,18 @@
     <LangVersion>preview</LangVersion>
   </PropertyGroup>
 
+  <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
+    <WarningLevel>4</WarningLevel>
+    <WarningsAsErrors>3239,3517</WarningsAsErrors>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+    <WarningLevel>4</WarningLevel>
+    <WarningsAsErrors>3239,3517</WarningsAsErrors>
+  </PropertyGroup>
+
   <ItemGroup>
+    <Compile Include="InternalTypes.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 

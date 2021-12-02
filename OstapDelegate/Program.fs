@@ -1,124 +1,22 @@
 ﻿
 open System
-open System.Runtime.CompilerServices
+open OstapDelegate.InternalTypes
 
 
 
-type IError = 
-    abstract member GetErrorMessage: unit -> string
-
-[<Struct;>] 
-type ParsingError = { PositionStart: int; PositionEnd:int; Error: IError }
-type Eq<'t> = delegate of 't *'t -> bool
-
-type Status =
-    | Success = 0
-    | Failure = 1
-    | FatalError = -1
 
 
-module Parser = 
-    [<IsByRefLike; Struct; NoComparison; NoEquality>]
-    type UnsafeParserStream<'t> = 
-        val mutable Errors : ResizeArray<ParsingError>
-        val mutable Position: int
-        val mutable Label: string
-        val mutable Status: Status
-        val Stream: ReadOnlySpan<'t>
-        
-        member inline x.Advance step = 
-            x.Position <- x.Position + step
-            x.Status <- Status.Success
-        member inline x.SignalMiss() = 
-            x.Status <- Status.Failure
-            
-        member inline x.SignalSuccess() = 
-            x.Status <- Status.Success
-            
-        member x.SignalFatalError(start, ``end``, error) =
-            x.Status <- Status.FatalError
-            if isNull x.Errors then x.Errors <- ResizeArray()
-            x.Errors.Add {PositionStart = start; PositionEnd = ``end``; Error = error}
-            
-        
 
-        new(stream, pos) = {Stream = stream; Position = pos; Errors = Unchecked.defaultof<_>; Status = Status.Success; Label = ""}
-        member inline x.TryGetCurrentToken(var: outref<'t>) =
-            let p = x.Position
-            if p < x.Stream.Length then
-                var <- x.Stream.[p]
-                true
-            else false
-            
-        member inline x.CurrentStream = x.Stream.Slice(x.Position)
-    
-    type Inl = InlineIfLambdaAttribute
-    type IArgs<'t1, 't2> =
-        abstract member ApplyTo<'r> : ('t1 -> 't2 -> 'r) -> 'r
-    type IArgs<'t1, 't2, 't3> = 
-        abstract member ApplyTo<'r> : ('t1 -> 't2 -> 't3 -> 'r) -> 'r
-    type IArgs<'t1, 't2, 't3, 't4> =  
-        abstract member ApplyTo<'r> : ('t1 -> 't2 -> 't3 -> 't4 -> 'r) -> 'r
-    type IArgs<'t1, 't2, 't3, 't4, 't5> =
-        abstract member ApplyTo<'r> : ('t1 -> 't2 -> 't3 -> 't4 -> 't5 -> 'r) -> 'r
-        
-    [<Struct; NoComparison; NoEquality>]   
-    type ArgumentHolder<'t1, 't2> =
-        val mutable F1: 't1
-        val mutable F2: 't2
-        member inline x.ApplyTo ([<Inl>] f) = f x.F1 x.F2
-        interface IArgs<'t1, 't2> with
-            override x.ApplyTo  f = x.ApplyTo f
-
-        
-    [<Struct; NoComparison; NoEquality>]   
-    type ArgumentHolder<'t1, 't2, 't3> =
-        val mutable F1: ArgumentHolder<'t1, 't2>
-        val mutable F2: 't3
-        member inline x.ApplyTo ([<Inl>] f) = f x.F1.F1 x.F1.F2 x.F2
-        interface IArgs<'t1, 't2, 't3> with
-            override x.ApplyTo f = x.ApplyTo f
-
-        
-    [<Struct; NoComparison; NoEquality>]   
-    type ArgumentHolder<'t1, 't2, 't3, 't4> =
-        val mutable F1: ArgumentHolder<'t1, 't2, 't3>
-        val mutable F2: 't4
-        member inline x.ApplyTo ([<Inl>] f) = f x.F1.F1.F1 x.F1.F1.F2 x.F1.F2 x.F2
-        interface IArgs<'t1, 't2, 't3, 't4> with
-            override x.ApplyTo f = x.ApplyTo f
-            
-
-    
-    [<Struct; NoComparison; NoEquality>]   
-    type ArgumentHolder<'t1, 't2, 't3, 't4, 't5> =
-        val mutable F1: ArgumentHolder<'t1, 't2, 't3, 't4>
-        val mutable F2: 't5
-        member inline x.ApplyTo ([<Inl>] f) = f x.F1.F1.F1.F1 x.F1.F1.F1.F2 x.F1.F1.F2 x.F1.F2 x.F2
-        interface IArgs<'t1, 't2, 't3, 't4, 't5> with
-            override x.ApplyTo f = x.ApplyTo f
-
-    type Parser<'tok, 'value> = delegate of byref<UnsafeParserStream<'tok>> * outref<'value> -> unit
-    type Pipeline<'tok, 'a, 'b> = Parser<'tok, ArgumentHolder<'a, 'b>>
-    type Pipeline<'tok, 'a, 'b, 'c> = Parser<'tok, ArgumentHolder<'a, 'b, 'c>>
-    type Pipeline<'tok, 'a, 'b, 'c, 'd> = Parser<'tok, ArgumentHolder<'a, 'b, 'c, 'd>>
-    type Pipeline<'tok, 'a, 'b, 'c, 'd, 'e> = Parser<'tok, ArgumentHolder<'a, 'b, 'c, 'd, 'e>>
-
-    type P<'tok, 'value> = unit -> Parser<'tok, 'value>
-    
-    type Constructor<'t> = delegate of unit -> 't
-    type Folder<'res, 'elem> = delegate of 'res * 'elem -> 'res
-
-    
-    type ManyParser<'tok, 'value, 'finalValue>([<Inl>] parser: P<'tok, 'value>,  [<Inl>] folder: Folder<_,_>, [<Inl>] constructor: Constructor<_>, minCount, maxCount) =
+module Parser =
+    type ManyParser<'tok, 'value, 'finalValue>([<Inl>] parser: Parser<'tok, 'value>,  [<Inl>] folder: 'finalValue-> 'value -> 'finalValue, [<Inl>] constructor: Constructor<_>, minCount, maxCount) =
         let error = {new IError with member x.GetErrorMessage() = $"Expected no less than {minCount} successfully parsed values. We found less, but input was consumed"}
         member x.ParseRepeatedly(stream: byref<UnsafeParserStream<'tok>>, currentCount: byref<int>, accumulatedValue: byref<'finalValue>) =
             if currentCount < maxCount then
                 let mutable value = Unchecked.defaultof<_>
-                (parser()).Invoke(&stream, &value)
+                (parser).Invoke(&stream, &value)
                 match stream with
                 | {Status = Status.Success} ->
-                    accumulatedValue <- folder.Invoke(accumulatedValue, value)
+                    accumulatedValue <- folder accumulatedValue value
                     currentCount <- currentCount + 1
                     x.ParseRepeatedly(&stream, &currentCount, &accumulatedValue)
                 | _ -> ()
@@ -138,7 +36,7 @@ module Parser =
             
                 
             
-    let inline matchAndReturn ([<Inl>]  eq: Eq<_>) valueToMatch valueToReturn : P<_,_> = 
+    let inline matchAndReturnWithEq ([<Inl>]  eq: Eq<_>) valueToMatch valueToReturn : P<_,_> = 
         fun () ->
             Parser<_,_>
                 (fun stream v ->
@@ -148,19 +46,18 @@ module Parser =
                         stream.Advance(1)
                     | _ -> stream.SignalMiss())
                 
-    let inline matchSequenceAndReturn ([<Inl>]  eq: Eq<_>) (seq: ReadOnlyMemory<_>) valueToReturn : P<_,_> =
+    let inline matchSequenceAndReturnWithEq  ([<Inl>] eq: EqSeq<_>) (seq: ReadOnlyMemory<_>) valueToReturn : P<_,_> =
         fun () ->
             Parser<_,_>
                 (fun stream v ->
                     let length = seq.Length
                     let span = seq.Span
-                    let mutable i = 0
-                    let s = stream.CurrentStream
-                    while i < length && eq.Invoke(s.[i], span.[i]) do
-                        i <- i + 1
-                    if i = length then
-                        stream.Advance(length)
-                        v <- valueToReturn
+                    if stream.Stream.Length - stream.Position >= length then
+                        let s = stream.Stream.Slice(stream.Position, length)
+                        if eq.Invoke(s, span) then
+                            stream.Advance(length)
+                            v <- valueToReturn
+                        else stream.SignalMiss()
                     else stream.SignalMiss())
     let inline ret value =
         fun () -> Parser<_,_>(fun stream v -> stream.Advance(0); v <- value)
@@ -208,10 +105,30 @@ module Parser =
                         i <- i + 1
                         shouldProceed <- i < parsers.Length && stream.Status = Status.Failure)
     
-    let inline many ([<Inl>] folder) ([<Inl>] ctr) minRepeats ([<Inl>] parser) =
-        let manyParser = ManyParser(parser, Folder<_,_>(folder), Constructor<_>(ctr), minRepeats, Int32.MaxValue)
+    let inline many ([<Inl>] folder) ([<Inl>] ctr: unit -> 'r) minCount ([<Inl>] p: P<_,_>) =
+        //let manyParser = ManyParser(parser(), folder, Constructor<_>(ctr), minRepeats, Int32.MaxValue)
         fun () ->
-            Parser<_,_>(fun stream v -> manyParser.Parse(&stream, &v))
+            Parser<_,_>
+                (fun stream v ->
+                    let initialPosition = stream.Position
+                    let mutable count = 0
+                    v <- ctr()
+                    let mutable parserResult = Unchecked.defaultof<_>
+                    let parser = p()
+                    while stream.Status = Status.Success do
+                        p().Invoke(&stream, &parserResult)
+                        if stream.Status = Status.Success then
+                            v <- folder v parserResult
+                            count <- count + 1
+                    if count >= minCount && stream.Status <> Status.FatalError then
+                        stream.SignalSuccess()
+                    else if count < minCount then
+                        if stream.Position <> initialPosition then
+                            stream.SignalFatalError(initialPosition, stream.Position, {new IError with member x.GetErrorMessage() = $"Expected no less than {minCount} successfully parsed values. We found less, but input was consumed"})
+                        else stream.SignalMiss()
+                )
+//        let p = Parser<_,_>(fun stream v -> manyParser.Parse(&stream, &v))
+//        fun () -> p
     
     let inline map2 ([<Inl>] p1: P<'t, 'a>) ([<Inl>] p2: P<'t, 'b>) ([<Inl>] f) =
         fun () ->
@@ -246,70 +163,6 @@ module Parser =
     
     let inline (<+) ([<Inl>] p1: P<'t, 'a>) ([<Inl>] p2: P<'t, 'b>) = map2 p1 p2 (fun a b -> a)
     let inline (+>) ([<Inl>] p1: P<'t, 'a>) ([<Inl>] p2: P<'t, 'b>) = map2 p1 p2 (fun a b -> b)
-    
-
-
-
-
-    type Mutator<'s, 'c when 's : struct> = delegate of byref<'s> -> byref<'c>
-    
-    type Default3 =
-        class end
-    type Default2 =
-        class inherit Default3 end
-    type Default1 = class inherit Default2 end
-    
-    
-        
-        
-    type PH =
-        inherit Default1
-
-        static member inline (?<-)([<Inl>] p1: Pipeline< ^t,  ^a,  ^b>, [<Inl>] p2: Parser< ^t,  ^c>, _: PH) =
-            Pipeline< ^t,  ^a,  ^b,  ^c>
-                (fun stream v ->
-                    let initialPosition = stream.Position
-                    p1.Invoke(&stream, &v.F1)
-                    if stream.Status = Status.Success then
-                        p2.Invoke(&stream, &v.F2)
-                        if stream.Status <> Status.Success then 
-                            if stream.Position <> initialPosition then
-                                stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>)) 
-
-        static member inline (?<-)([<Inl>] p1:  Pipeline< ^t,  ^a,  ^b,  ^c>, [<Inl>] p2: Parser< ^t,  ^d>, _: PH) =
-            Pipeline< ^t,  ^a,  ^b,  ^c,  ^d>
-                (fun stream v ->
-                    let initialPosition = stream.Position
-                    p1.Invoke(&stream, &v.F1)
-                    if stream.Status = Status.Success then
-                        p2.Invoke(&stream, &v.F2)
-                        if stream.Status <> Status.Success then 
-                            if stream.Position <> initialPosition then
-                                stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>))
-        static member inline (?<-)([<Inl>] p1:  Pipeline< ^t,  ^a,  ^b,  ^c, ^d>, [<Inl>] p2: Parser< ^t,  ^e>, _: PH) =
-            Pipeline< ^t,  ^a,  ^b,  ^c,  ^d, ^e>
-                (fun stream v ->
-                    let initialPosition = stream.Position
-                    p1.Invoke(&stream, &v.F1)
-                    if stream.Status = Status.Success then
-                        p2.Invoke(&stream, &v.F2)
-                        if stream.Status <> Status.Success then 
-                            if stream.Position <> initialPosition then
-                                stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>))
-                    
-    type PH with
-        static member inline (?<-)([<Inl>] p1: Parser< ^t, ^a>, [<Inl>] p2: Parser< ^t,  ^b>, _: Default1) =
-            Pipeline< ^t,  ^a,  ^b>
-                (fun stream v ->
-                    let initialPosition = stream.Position
-                    p1.Invoke(&stream, &v.F1)
-                    if stream.Status = Status.Success then
-                        p2.Invoke(&stream, &v.F2)
-                        if stream.Status <> Status.Success then 
-                            if stream.Position <> initialPosition then
-                                stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>))
-    
-
     let inline (|->) ([<Inl>] p: unit -> Parser< ^t, ^a> when ^a : (member ApplyTo: (^b -> ^c) -> ^d)) ([<Inl>] f: ^b -> ^c) =
         fun () ->
             Parser<_,_>
@@ -321,40 +174,41 @@ module Parser =
             
     let inline (<+>) ([<Inl>] p1) ([<Inl>] p2) =
         fun () -> (?<-) (p1()) (p2()) Unchecked.defaultof<PH>
+        
+    let inline (||>)  ([<Inl>] p1: P<'t, 'a>) ([<Inl>] f) =
+        f p1
+        
+    let inline (<?>) ([<Inl>] p: P<'t, 'a>) dv =
+        fun () ->
+            Parser<_,_>
+                (fun stream v ->
+                    (p()).Invoke(&stream, &v)
+                    if stream.Status = Status.Failure then
+                        stream.SignalSuccess()
+                        v <- dv)
 
-    let inline eq a b = (# "ceq" a b : bool #)
-
-
-    let inline a1 ()  = matchAndReturn (Eq<_>eq) 'l' 1 ()   
-    let inline a2 () = matchAndReturn  (Eq<_>eq) 'o' 2 ()
-    let inline a3 () = matchAndReturn  (Eq<_>eq) 'h' 3 ()
-    
-    let inline firstLetter () = (a1 <|> a2 <|> a3)()
-    
-    
-    
+    let inline matchAndReturn vtm vtr = matchAndReturnWithEq (Eq<_>(=)) vtm vtr
+    let inline matchStringAndReturn stm vtr = matchSequenceAndReturnWithEq (EqSeq(fun a b -> MemoryExtensions.Equals(a, b, StringComparison.Ordinal))) stm vtr
     let inline char (c: Char) () = satisfy (fun t -> t = c) ()
     
-    let loh = char 'l' <+ char 'o' <+ char 'h' |>> (fun c -> [c; c; c; c;c])
-    
-//    let inline loh2 () =
-//        char 'k' <*> char 'l' <*> char 'o' <*> (char '1' |>> (fun c -> int c - int '0' ))
+    let inline integer () =
+        many (fun acc e -> acc * 10L + int64 e) (fun () -> 0L) 1 (satisfy (fun c -> c >= '0' && c <= '9') |>> fun c -> int64 c - int64 '0') ()
 
-    let inline loh3 () =
-        (char 'a' +> a1 <+ char 'b' <+> firstLetter <+> (char '1' |>> (fun c -> int c - int '0' ))
-        |-> fun a b c  -> a + c + b
-        |>> (fun r -> 7 * r))()
-
+    let inline fraction () =
+        (satisfy (fun c -> c >= '0' && c <= '9') |>> fun c -> int64 c - int64 '0'
+        ||> many (fun struct(exp, v) e -> struct(exp + 1, v * 10L + int64 e)) (fun () -> struct(0, 0L)) 1
+        |>> fun struct(exp, v) -> (float v) / Math.Pow(10.0, float exp)) ()
     
-    let b = map2 (matchAndReturn  (Eq<_>(=)) 'l' 10) (matchAndReturn  (Eq<_>(=)) 'o' 5) (fun a b -> a * b)
-    let c = map (fun c -> c.ToString()) (map2 a1 a2 (*))
+    let inline signedInteger () =
+        (matchAndReturn '-' -1 <?> 1
+        <+> integer
+        |-> fun s i -> int64 s * i)()
     
-    let d = map2 a1 a2 (*) |>> (fun c -> float c / 500.)
 
     let run (str: string) =
         let mutable  unsafeParserStream = UnsafeParserStream(str.AsSpan(), 0)
         let mutable r = Unchecked.defaultof<_> 
-        loh().Invoke(&unsafeParserStream, &r)
+        integer().Invoke(&unsafeParserStream, &r)
         printfn $"{unsafeParserStream.Status}"
         printfn $"{unsafeParserStream.Position}"
         printfn $"{r}"
@@ -362,7 +216,7 @@ module Parser =
 
 open Parser
 
-run "lohlohlohoban"
+run "42478212452g"
 
 // For more information see https://aka.ms/fsharp-console-apps
 printfn "Hello from F#"
