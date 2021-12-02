@@ -114,7 +114,6 @@ module Parser =
                     let mutable count = 0
                     v <- ctr()
                     let mutable parserResult = Unchecked.defaultof<_>
-                    let parser = p()
                     while stream.Status = Status.Success do
                         p().Invoke(&stream, &parserResult)
                         if stream.Status = Status.Success then
