@@ -1,5 +1,7 @@
 ﻿module OstapDelegate.InternalTypes
 open System
+open System
+open System
 open System.Runtime.CompilerServices
 open System.Runtime.InteropServices
 
@@ -9,7 +11,7 @@ type IError = abstract member GetErrorMessage: unit -> string
 [<Struct;>] 
 type ParsingError = { PositionStart: int; PositionEnd:int; Error: IError }
 type Eq<'t> = delegate of 't *'t -> bool
-type EqSeq<'t> = delegate of ReadOnlySpan<'t> * ReadOnlySpan<'t> -> bool
+type StartsWith<'t> = delegate of ReadOnlySpan<'t> * ReadOnlySpan<'t> -> bool
 
 
 
@@ -25,6 +27,7 @@ type UnsafeParserStream<'t> =
     val mutable Label: string
     val mutable Status: Status
     val Stream: ReadOnlySpan<'t>
+    val Memory: ReadOnlyMemory<'t>
 
     
     member inline x.Advance step = 
@@ -43,7 +46,7 @@ type UnsafeParserStream<'t> =
         
     
 
-    new(stream, pos) = {Stream = stream; Position = pos; Errors = Unchecked.defaultof<_>; Status = Status.Success; Label = ""}
+    new(memory: ReadOnlyMemory<'t>, pos) = {Memory = memory; Stream = memory.Span; Position = pos; Errors = Unchecked.defaultof<_>; Status = Status.Success; Label = ""}
     member inline x.TryGetCurrentToken(var: outref<'t>) =
         let p = x.Position
         if p < x.Stream.Length then
@@ -51,9 +54,11 @@ type UnsafeParserStream<'t> =
             true
         else false
         
-    member inline x.CurrentStream = x.Stream.Slice(x.Position)
-
-
+[<Struct; NoComparison; NoEquality>]   
+type MutTuple<'t1, 't2> =
+    val mutable Item1: 't1
+    val mutable Item2: 't2
+    new(a, b) = {Item1 = a; Item2 = b}
     
 [<Struct; NoComparison; NoEquality>]   
 type ArgumentHolder<'t1, 't2> =
@@ -90,10 +95,7 @@ type Pipeline<'tok, 'a, 'b, 'c, 'd, 'e> = Parser<'tok, ArgumentHolder<'a, 'b, 'c
 type P<'tok, 'value> = unit -> Parser<'tok, 'value>
 
 type Constructor<'t> = delegate of unit -> 't
-type Folder<'res, 'elem> = delegate of 'res * 'elem -> 'res
-
-
-
+type Folder<'res, 'elem> = delegate of byref<'res> * byref<'elem> -> unit
 type Default3 = class end
 type Default2 = class inherit Default3 end
 type Default1 = class inherit Default2 end   
@@ -130,7 +132,7 @@ type PH =
                     if stream.Status <> Status.Success then 
                         if stream.Position <> initialPosition then
                             stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>))
-                
+    
 type PH with
     static member inline (?<-)([<Inl>] p1: Parser< ^t, ^a>, [<Inl>] p2: Parser< ^t,  ^b>, _: Default1) =
         Pipeline< ^t,  ^a,  ^b>
@@ -142,3 +144,10 @@ type PH with
                     if stream.Status <> Status.Success then 
                         if stream.Position <> initialPosition then
                             stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>))
+            
+module Span =
+    let inline fold ([<Inl>] folder) state (span: ReadOnlySpan<_>) =
+        let mutable result = state
+        for item in span do
+            result <- folder result item
+        result
