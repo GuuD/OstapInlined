@@ -14,6 +14,8 @@
   <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
     <WarningLevel>4</WarningLevel>
     <WarningsAsErrors>3239,3517</WarningsAsErrors>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <DebugSymbols>true</DebugSymbols>
   </PropertyGroup>
 
   <ItemGroup>

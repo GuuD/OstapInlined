@@ -18,6 +18,15 @@ module InternalTypes =
         | Success = 0
         | Failure = 1
         | FatalError = -1
+        
+    type Expectations<'t> =
+        | Token of 't
+        | Sequence of ReadOnlyMemory<'t>
+        | Labeled of string
+        | Choice of Expectations<'t> * Expectations<'t>
+        | Repeated of min: int * max: int * Expectations<'t>
+        | Nested of parent: Expectations<'t> * child: Expectations<'t>
+        | Anything
 
     [<IsByRefLike; Struct; NoComparison; NoEquality>]
     type UnsafeParserStream<'t> = 
@@ -25,6 +34,7 @@ module InternalTypes =
         val mutable Position: int
         val mutable Label: string
         val mutable Status: Status
+        val mutable Expectations: unit -> Expectations<'t> 
         val Stream: ReadOnlySpan<'t>
         val Memory: ReadOnlyMemory<'t>
 
@@ -38,6 +48,10 @@ module InternalTypes =
             x.Status <- Status.Success
         member inline x.SignalMiss() = 
             x.Status <- Status.Failure
+        
+        member inline x.SignalMiss(f) = 
+            x.Status <- Status.Failure
+            x.Expectations <- f
             
         member inline x.SignalSuccess() = 
             x.Status <- Status.Success
@@ -49,7 +63,7 @@ module InternalTypes =
             
         
 
-        new(memory: ReadOnlyMemory<'t>, pos) = {Memory = memory; Stream = memory.Span; Position = pos; Errors = Unchecked.defaultof<_>; Status = Status.Success; Label = ""}
+        new(memory: ReadOnlyMemory<'t>, pos) = {Memory = memory; Stream = memory.Span; Position = pos; Errors = Unchecked.defaultof<_>; Status = Status.Success; Label = ""; Expectations = fun () -> Anything}
         member inline x.TryGetCurrentToken(var: outref<'t>) =
             if x.Position < x.Stream.Length then
                 var <- x.Stream.[x.Position]
@@ -221,21 +235,20 @@ module VList =
         member x.Cons(elem) = 
             match x with
             | Empty -> 
-                List({Bucket = Bucket([|elem; Unchecked.defaultof<_>|], Empty, false); CurrentElementIndex = 0})
-            | List({Bucket = b; CurrentElementIndex = i}) when not b.IsReadOnly && b.Capacity > i + 1 && Interlocked.CompareExchange(&b.LatestIndex, i + 1, i) = i ->
+                List({Bucket = Bucket([|elem; Unchecked.defaultof<_>|], Empty); CurrentElementIndex = 0})
+            | List({Bucket = b; CurrentElementIndex = i}) when b.Capacity > i + 1 && Interlocked.CompareExchange(&b.LatestIndex, i + 1, i) = i ->
                 Array.set b.Elems (i+1) elem
                 List({Bucket = b; CurrentElementIndex = i + 1})
-            | List({Bucket = b; CurrentElementIndex = i}) -> 
+            | List({CurrentElementIndex = i}) -> 
                 let elems = Array.zeroCreate ((i + 1) * 2)
                 elems.[0] <- elem
-                List({Bucket = Bucket(elems, x, false); CurrentElementIndex = 0})
+                List({Bucket = Bucket(elems, x); CurrentElementIndex = 0})
         member x.Count = 
             match x with
             | Empty -> 0
             | List({Bucket = b; CurrentElementIndex = i}) -> i + 1 + b.Previous.Count
-    and Bucket<'t>(elems: 't[], previous: VList<'t>, isReadOnly) = 
+    and Bucket<'t>(elems: 't[], previous: VList<'t>) = 
         [<DefaultValue>] val mutable LatestIndex : int
-        member x.IsReadOnly = isReadOnly 
         member x.Capacity = Array.length elems
         member x.Previous: VList<'t> = previous
         member x.Elems = elems
