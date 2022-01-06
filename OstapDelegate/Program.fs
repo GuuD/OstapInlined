@@ -3,6 +3,7 @@ open System
 open System.Diagnostics
 open System.IO
 open System.Runtime.CompilerServices
+open Microsoft.FSharp.Core
 open OstapDelegate.InternalTypes
 open System.Runtime.InteropServices
 
@@ -30,8 +31,7 @@ module Parser =
                     if eq.Invoke(stream.Stream.Slice stream.Position, span) then
                         stream.Advance(length)
                         v <- valueToReturn
-                    else stream.SignalMiss()
-                    )
+                    else stream.SignalMiss())
     let inline ret value =
         fun () -> Parser<_,_>(fun stream v -> stream.Advance(0); v <- value)
 
@@ -60,7 +60,7 @@ module Parser =
                 (fun stream v ->
                     match stream.TryGetCurrentToken() with
                     | true, t when f t ->
-                        stream.Advance(1)
+                        stream.Advance(1) 
                         v <- t
                     | _ -> stream.SignalMiss())
                 
@@ -73,20 +73,7 @@ module Parser =
                         stream.Advance(1)
                         v <- f t
                     | _ -> stream.SignalMiss())
-    
-               
-    let inline oneOf (parsers: P<'t, 'a> list) =
-        let parsers = parsers |> List.map (fun p -> p()) |> Array.ofList
-        fun () ->
-            Parser<_,_>(
-                fun stream v ->
-                    let mutable i = 0
-                    let mutable shouldProceed = i < parsers.Length
-                    while shouldProceed do
-                        let current = parsers.[i]
-                        current.Invoke(&stream, &v)
-                        i <- i + 1
-                        shouldProceed <- i < parsers.Length && stream.Status = Status.Failure)
+
     
     let inline many ([<Inl>] folder) ([<Inl>] ctr: unit -> 'r) min max ([<Inl>] p: P<_,_>) =
         fun () ->
@@ -108,26 +95,27 @@ module Parser =
                             stream.SignalFatalError(initialPosition, stream.Position, {new IError with member x.GetErrorMessage() = $"Expected no less than {min} successfully parsed values. We found less, but input was consumed"})
                         else stream.SignalMiss()
                 )
-    let inline manyFold ([<Inl>] folder: Folder<_,_>) ([<Inl>] ctr: unit -> 'r) min max ([<Inl>] p: P<_,_>) =
+    let inline manyCount ([<Inl>] folder) ([<Inl>] ctr: unit -> 'r) min max ([<Inl>] p: P<_,_>) =
         fun () ->
             Parser<_,_>
-                (fun stream v ->
+                (fun stream (v: outref<ArgumentHolder<_,_>>) ->
                     let initialPosition = stream.Position
-                    let mutable count = 0
-                    v <- ctr()
+//                    let mutable count = 0
+//                    let mutable res = ctr()
+                    v.F1 <- ctr()
                     let mutable parserResult = Unchecked.defaultof<_>
-                    while stream.Status = Status.Success && count < max do
+                    while stream.Status = Status.Success && v.F2 < max do
                         p().Invoke(&stream, &parserResult)
                         if stream.Status = Status.Success then
-                            folder.Invoke(&v, &parserResult)
-                            count <- count + 1
-                    if count >= min && stream.Status <> Status.FatalError then
+                            v.F1 <- folder v.F1 parserResult
+                            v.F2 <- v.F2 + 1
+                    if v.F2 >= min && stream.Status <> Status.FatalError then
                         stream.SignalSuccess()
-                    else if count < min then
+                    else if v.F2 < min then
                         if stream.Position <> initialPosition then
                             stream.SignalFatalError(initialPosition, stream.Position, {new IError with member x.GetErrorMessage() = $"Expected no less than {min} successfully parsed values. We found less, but input was consumed"})
                         else stream.SignalMiss()
-                )            
+                )        
     let inline separated ([<Inl>] folder) ([<Inl>] ctr: unit -> 'r) min max ([<Inl>] sp: P<_,_>) ([<Inl>] p: P<_,_>) =
         fun () ->
             Parser<_,_>
@@ -175,12 +163,9 @@ module Parser =
         fun () ->
             Parser<_,_>
                 (fun stream v ->
-                    let initialPosition = stream.Position
-                    let mutable c = Unchecked.defaultof<_>
-                    while stream.TryGetCurrentToken(&c) && pred c do
-                        stream.Advance(1)
-                    if stream.Position > initialPosition then
-                        v <- stream.Memory.Slice(initialPosition, stream.Position - initialPosition)
+                    let skipped = stream.SkipWhile pred
+                    if skipped > 0 then
+                        v <- stream.Memory.Slice(stream.Position - skipped, skipped)
                     else stream.SignalMiss())
        
     let inline either ([<Inl>] p1: P<'t, 'a>) ([<Inl>] p2: P<'t, 'a>) =
@@ -228,8 +213,9 @@ module Parser =
                     if stream.Status = Status.Success then v <- (^a : (member ApplyTo: (^b -> ^c) -> ^d)(vo, f)))
 
             
-    let inline (<+>) ([<Inl>] p1) ([<Inl>] p2) =
-        fun () -> (?<-) (p1()) (p2()) Unchecked.defaultof<PH>
+    let inline (<+>) ([<Inl>] p1) ([<Inl>] p2: unit -> ^b) =
+        fun () ->
+        ((?<-) (p1()) (p2()) Unchecked.defaultof<PH>)()
         
     let inline (<?>) ([<Inl>] p: P<'t, 'a>) dv =
         fun () ->
@@ -245,14 +231,26 @@ module Parser =
             Parser<_,_>
                 (fun stream v ->
                 let initialPosition = stream.Position
-                let mutable ignore = Unchecked.defaultof<_> 
                 p().Invoke(&stream, &v)
                 if stream.Status = Status.Success then
-                    ps().Invoke(&stream, &ignore)
+                    ps().Invoke(&stream) |> ignore
                     if stream.Status <> Status.Success then 
                         if stream.Position <> initialPosition then
                             stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>))
                 
+//    let inline peek ([<Inl>] p: P<'t, 'a>)  =
+//        fun () ->
+//            Parser<_,_>
+//                (fun stream v ->
+//                let initialPosition = stream.Position
+//                let mutable ignore = Unchecked.defaultof<_> 
+//                p().Invoke(&stream, &v)
+//                if stream.Status = Status.Success then
+//                    ps().Invoke(&stream, &ignore)
+//                    if stream.Status <> Status.Success then 
+//                        if stream.Position <> initialPosition then
+//                            stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>))
+    let inline parse ([<Inl>] p: P<'t, 'a>) = p ()
     [<Literal>]
     let M = Int32.MaxValue
     let inline zeroOrMoreToList ([<Inl>] p: P<'t, 'a>) =
@@ -277,49 +275,50 @@ module Parser =
     let inline charAndReturn vtm vtr () = matchAndReturnWithEq (Eq<_>(=)) vtm vtr ()
     let inline stringAndReturn (stm: string) vtr () =
         matchSequenceAndReturnWithEq (StartsWith(fun a b -> a.StartsWith(b))) (stm.AsMemory()) vtr ()
-    let inline ch (c: Char) () = satisfy (fun t -> t = c) ()
+    let inline ch (c: Char) () = charAndReturn c () |> parse
+    open OstapDelegate.Operators
+    let inline dot () = ch '.' |> parse
     
-    let inline dot () = ch '.' ()
+    let inline quote () = ch '"' |> parse
     
-    let inline quote () = ch '"' ()
+    let inline ``[`` () = ch '[' |> parse
+    let inline ``]`` () = ch ']' |> parse
     
-    let inline ``[`` () = ch '[' ()
-    let inline ``]`` () = ch ']' ()
-    
-    let inline ``{`` () = ch '{' ()
-    let inline ``}`` () = ch '}' ()
-    let inline comma () = ch ',' ()
-    let inline colon () = ch ':' ()
-    let inline anySpace () = satisfy (fun c -> c = ' ' || c = '\r' || c = '\n' || c = '\t') ()
-    let inline spaces () = manySkip 0 M anySpace ()
+    let inline ``{`` () = ch '{' |> parse
+    let inline ``}`` () = ch '}' |> parse
+    let inline comma () = ch ',' |> parse
+    let inline colon () = ch ':' |> parse
+    let inline anySpace () = satisfy (fun c -> c = ' ' || c = '\r' || c = '\n' || c = '\t') |> parse
+    let inline spaces () = manySkip 0 M anySpace |> parse
     let inline digit () =
-        (satisfyMap (fun c -> c >= '0' && c <= '9') (fun c -> int64 c - int64 '0')) ()
+        satisfyMap (fun c -> c >= '0' && c <= '9') (fun c -> int64 c - int64 '0') |> parse
     let inline integer () =
-        (many (fun acc e -> acc * 10L + e) (fun () -> 0L) 1 M digit) ()
+        many (fun acc e -> acc * 10L + e) (fun () -> 0L) 1 M digit |> parse
 
     let inline fractional () =
-        (dot
-        +> manyFold (Folder<MutTuple<_,_>,_>(fun mt e -> mt.Item1 <- mt.Item1 + 1; mt.Item2 <- mt.Item2 * 10L + int64 e)) (fun () -> MutTuple(0, 0L)) 1 M digit
-        |>> fun mt -> (float mt.Item2) / Math.Pow(10.0, float mt.Item1)
-        <?> 0.0) ()
-//    let inline fractional () =
-//        (dot
-//        +> satisfyManySlice (fun c -> c >= '0' && c <= '9')
-//        |>> fun mem -> (float (Span.fold (fun acc e -> acc * 10L + (int64 e - int64 '0')) 0L mem.Span)) / Math.Pow(10.0, float mem.Length) 
-//        <?> 0.0) ()
+        dot
+        <+> manyCount (fun acc e -> acc * 10L + int64 e) (fun () -> 0L) 1 M digit
+        |-> fun v count -> (float v) / Math.Pow(10.0, float count)
+        <?> 0.0
+        |> parse
         
     let inline number () =
-        (integer <+> fractional
-        |-> fun i f -> float i + f )()
+        integer
+        <+> fractional
+        => fun i f -> float i + f
+        |> parse
     
     let inline signedInteger () =
-        (charAndReturn '-' -1L <?> 1L
+        charAndReturn '-' -1L <?> 1L
         <+> integer
-        |-> (*))()
+        |-> (*)
+        |> parse
         
     let inline signedNumber () =
-        ((charAndReturn '-' -1.0 <?> 1.0) <+> number
-        |-> (*))()
+        charAndReturn '-' -1.0 <?> 1.0
+        <+> number
+        |-> (*)
+        |> parse
         
     let inline simpleChar () =
         satisfy (fun c -> c <> '"' && c <> '\\') ()
@@ -332,10 +331,11 @@ module Parser =
         <|> satisfyMap (fun c -> c >= 'a' && c <= 'f') (fun c -> int c + 10 - int 'a')) ()
 
     let inline unicodeChar () =
-        (stringAndReturn "\\u" 0 +> many (fun acc v -> ( acc<<<4 ) + v) (fun () -> 0) 4 4 hexChar
+        (stringAndReturn "\\u" ()
+        <+> many (fun acc v -> ( acc<<<4 ) + v) (fun () -> 0) 4 4 hexChar
         |>> char) ()
         
-    
+
     
     let inline charInString () =
         (simpleChar
@@ -351,7 +351,7 @@ module Parser =
 
     let stringContent =
         let ra = ResizeArray<char>()
-        //let dictionary = System.Collections.Generic.Dictionary<_,_>()
+        let dictionary = System.Collections.Generic.Dictionary<_,_>()
         let p = 
             ((many (fun (acc : ResizeArray<char>) v -> acc.Add v; acc) (fun () -> ra.Clear(); ra) 0 M charInString)
             |>> (fun list -> 
@@ -361,15 +361,16 @@ module Parser =
 //                        let hashCode = String.GetHashCode(Span.op_Implicit span)
 //                        let res =
 //                            match dictionary.TryGetValue hashCode with
-//                            | true, (v: string) -> v
+//                            | true, (v) -> v
 //                            | _ ->
-//                                let string = span.ToString()
+//                                let string = span.ToString().AsMemory()
 //                                dictionary.[hashCode] <- string
 //                                string
 //                        res
                     else ReadOnlyMemory.Empty))()
         fun () -> p
-    let inline cachedString () = (quote +> stringContent <+ quote) ()
+    let inline cachedString () =
+        (quote +> (simpleString <+ quote) <|> (stringContent <+ quote)) ()
     
     type JObject =
         | JString of ReadOnlyMemory<char>
@@ -441,6 +442,7 @@ open Parser
 //run (File.ReadAllText "C:\\Developing\\Ostap4\\twitter.json") //"""{ "test": "5"} """
 //run """{ "test": 5} """
 run (File.ReadAllText "C:\\Developing\\Ostap4\\citylots.json") //"""{ "test": "5"} """
+//run (File.ReadAllText "C:\\Developing\\Ostap4\\test2.json") //"""{ "test": "5"} """
 
 // For more information see https://aka.ms/fsharp-console-apps
 printfn "Hello from F#"
