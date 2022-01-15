@@ -1,4 +1,16 @@
 ﻿namespace OstapDelegate
+
+open System
+open System.Collections.Generic
+open System.Runtime.CompilerServices
+open Microsoft.FSharp.NativeInterop
+#nowarn "9"
+
+module Writer =
+    
+    
+    open System
+    
 module InternalTypes =
     open System
     open System.Runtime.CompilerServices
@@ -11,30 +23,88 @@ module InternalTypes =
     type ParsingError = { PositionStart: int; PositionEnd:int; Error: IError }
     type Eq<'t> = delegate of 't *'t -> bool
     type StartsWith<'t> = delegate of ReadOnlySpan<'t> * ReadOnlySpan<'t> -> bool
-
-
-
+    module ThrowHelper =
+        let failwith e =
+            failwith e
+    
+    module ParsingError =
+        let chars = Dictionary<Char, String>()
+        let strings = Dictionary<String, String>()
+        let expectedChar c =
+            match chars.TryGetValue c with
+            | true, s -> s
+            | _ ->
+                let s = $"'{c}'"
+                chars.[c] <- s
+                s
+        let expectedString s = 
+            match strings.TryGetValue s with
+            | true, ss -> ss
+            | _ ->
+                let ss = $"\"{s}\""
+                strings.[s] <- ss
+                ss
+            
+    
     type Status =
         | Success = 0
         | Failure = 1
         | FatalError = -1
         
-    type Expectations<'t> =
-        | Token of 't
-        | Sequence of ReadOnlyMemory<'t>
-        | Labeled of string
-        | Choice of Expectations<'t> * Expectations<'t>
-        | Repeated of min: int * max: int * Expectations<'t>
-        | Nested of parent: Expectations<'t> * child: Expectations<'t>
-        | Anything
+    [<Struct; IsByRefLike>]
+    type private SlimBuffer =
+        val initialBuffer: Span<char>
+        val mutable position: int
+        
+        new(size: int) =
+            let size = min size 512 |> max 0
+            let mem = NativePtr.stackalloc<char>(size)
+            {initialBuffer = Span<char>(mem |> NativePtr.toVoidPtr, size); position = 0}
+        member inline x.Append(c: char) =
+            x.initialBuffer[x.position] <- c
+            x.position <- x.position + 1
+        member inline x.Append(str: string) =
+            str.AsSpan().CopyTo(x.initialBuffer.Slice(x.position))
+            x.position <- x.position + str.Length
+        member inline x.Append(v: #ISpanFormattable) =
+            let mutable written = 0
+            let result = v.TryFormat(x.initialBuffer.Slice(x.position), &written, ReadOnlySpan.Empty, Unchecked.defaultof<_>)
+            if result then
+                x.position <- x.position + written
+            else ThrowHelper.failwith $"Buffer not large enough to write {v}"
+            
+        member inline x.Set(c: char) =
+            x.initialBuffer[0] <- c
+            x.position <- 1
+
+        member inline x.Set(str: string) =
+            x.position <- 0
+            if x.initialBuffer.Length > x.position + str.Length then
+                str.AsSpan().CopyTo(x.initialBuffer.Slice(x.position))
+                x.position <- x.position + str.Length
+            else failwith $"Buffer not large enough to write \"{str}\""
+        member inline x.Set(v: #ISpanFormattable) =
+            x.position <- 0
+            let mutable written = 0
+            let result = v.TryFormat(x.initialBuffer, &written, ReadOnlySpan.Empty, Unchecked.defaultof<_>)
+            if result then
+                x.position <- written
+            else failwith $"Buffer not large enough to write {v}"
+        
+        member x.Clear() =
+            x.position <- 0
+        member x.Capacity = x.initialBuffer.Length
+        member x.FreeCapacity = x.initialBuffer.Length - x.position
+        
+        override x.ToString() =
+            x.initialBuffer.Slice(0, x.position).ToString()      
 
     [<IsByRefLike; Struct; NoComparison; NoEquality>]
     type UnsafeParserStream<'t> = 
         val mutable Errors : ResizeArray<ParsingError>
         val mutable Position: int
-        val mutable Label: string
+        val mutable ErrorLabel: string
         val mutable Status: Status
-        val mutable Expectations: unit -> Expectations<'t> 
         val Stream: ReadOnlySpan<'t>
         val Memory: ReadOnlyMemory<'t>
 
@@ -46,12 +116,13 @@ module InternalTypes =
         member inline x.Advance step = 
             x.Position <- x.Position + step
             x.Status <- Status.Success
+        member inline x.SignalMiss(errorLabel) = 
+            x.Status <- Status.Failure
+            x.ErrorLabel <- errorLabel
+        
         member inline x.SignalMiss() = 
             x.Status <- Status.Failure
-        
-        member inline x.SignalMiss(f) = 
-            x.Status <- Status.Failure
-            x.Expectations <- f
+            //x.ExpectedByPrevious <- e
             
         member inline x.SignalSuccess() = 
             x.Status <- Status.Success
@@ -63,7 +134,7 @@ module InternalTypes =
             
         
 
-        new(memory: ReadOnlyMemory<'t>, pos) = {Memory = memory; Stream = memory.Span; Position = pos; Errors = Unchecked.defaultof<_>; Status = Status.Success; Label = ""; Expectations = fun () -> Anything}
+        new(memory: ReadOnlyMemory<'t>, pos) = {Memory = memory; Stream = memory.Span; Position = pos; Errors = Unchecked.defaultof<_>; Status = Status.Success; ErrorLabel = ""}
         member inline x.TryGetCurrentToken(var: outref<'t>) =
             if x.Position < x.Stream.Length then
                 var <- x.Stream.[x.Position]
@@ -112,50 +183,50 @@ module InternalTypes =
     type PH =
         inherit Default1
     //    static member inline (?<-)([<Inl>] p1: Pipeline< ^t,  ^a,  ^b>, [<Inl>] p2: P< ^t,  ^c>, _: PH) =
-        static member inline (?<-)([<Inl>] p1: Pipeline< ^t,  ^a,  ^b>, [<Inl>] p2: Parser< ^t,  ^c>, _: PH) =
+        static member inline (?<-)([<Inl>] p1: unit -> Pipeline< ^t,  ^a,  ^b>, [<Inl>] p2: Parser< ^t,  ^c>, _: PH) =
 
             fun () ->
             Pipeline< ^t,  ^a,  ^b,  ^c>
                 (fun stream v ->
                     let initialPosition = stream.Position
-                    p1.Invoke(&stream, &v.F1)
+                    p1().Invoke(&stream, &v.F1)
                     if stream.Status = Status.Success then
                         p2.Invoke(&stream, &v.F2)
                         if stream.Status <> Status.Success then 
                             if stream.Position <> initialPosition then
                                 stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>)) 
     //    static member inline (?<-)([<Inl>] p1:  Pipeline< ^t,  ^a,  ^b,  ^c>, [<Inl>] p2: P< ^t,  ^d>, _: PH) =
-        static member inline (?<-)([<Inl>] p1:  Pipeline< ^t,  ^a,  ^b,  ^c>, [<Inl>] p2: Parser< ^t,  ^d>, _: PH) =
+        static member inline (?<-)([<Inl>] p1: unit ->  Pipeline< ^t,  ^a,  ^b,  ^c>, [<Inl>] p2: Parser< ^t,  ^d>, _: PH) =
 
             fun () ->
             Pipeline< ^t,  ^a,  ^b,  ^c,  ^d>
                 (fun stream v ->
                     let initialPosition = stream.Position
-                    p1.Invoke(&stream, &v.F1)
+                    p1().Invoke(&stream, &v.F1)
                     if stream.Status = Status.Success then
                         p2.Invoke(&stream, &v.F2)
                         if stream.Status <> Status.Success then 
                             if stream.Position <> initialPosition then
                                 stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>))
     //    static member inline (?<-)([<Inl>] p1:  Pipeline< ^t,  ^a,  ^b,  ^c, ^d>, [<Inl>] p2: P< ^t,  ^e>, _: PH) =
-        static member inline (?<-)([<Inl>] p1:  Pipeline< ^t,  ^a,  ^b,  ^c, ^d>, [<Inl>] p2: Parser< ^t,  ^e>, _: PH) =
+        static member inline (?<-)([<Inl>] p1: unit ->  Pipeline< ^t,  ^a,  ^b,  ^c, ^d>, [<Inl>] p2: Parser< ^t,  ^e>, _: PH) =
 
             fun () ->
             Pipeline< ^t,  ^a,  ^b,  ^c,  ^d, ^e>
                 (fun stream v ->
                     let initialPosition = stream.Position
-                    p1.Invoke(&stream, &v.F1)
+                    p1().Invoke(&stream, &v.F1)
                     if stream.Status = Status.Success then
                         p2.Invoke(&stream, &v.F2)
                         if stream.Status <> Status.Success then 
                             if stream.Position <> initialPosition then
                                 stream.SignalFatalError(initialPosition, stream.Position, Unchecked.defaultof<_>))
-        static member inline (?<-)([<Inl>] p1: Parser< ^t, Unit>, [<Inl>] p2: Parser< ^t,  ^b>, _: PH) =
+        static member inline (?<-)([<Inl>] p1: unit -> Parser< ^t, Unit>, [<Inl>] p2: Parser< ^t,  ^b>, _: PH) =
             fun () ->
             Parser< ^t, ^b>
                 (fun stream v ->
                     let initialPosition = stream.Position
-                    p1.Invoke(&stream) |> ignore
+                    p1().Invoke(&stream)
                     if stream.Status = Status.Success then
                         p2.Invoke(&stream, &v)
                         if stream.Status <> Status.Success then 
@@ -164,12 +235,12 @@ module InternalTypes =
         
     type PH with
     //    static member inline (?<-)([<Inl>] p1: Parser< ^t, ^a>, [<Inl>] p2: P< ^t,  ^b>, _: Default1) =
-        static member inline (?<-)([<Inl>] p1: Parser< ^t, ^a>, [<Inl>] p2: Parser< ^t,  ^b>, _: Default1) =
+        static member inline (?<-)([<Inl>] p1: unit -> Parser< ^t, ^a>, [<Inl>] p2: Parser< ^t,  ^b>, _: Default1) =
             fun () ->
             Pipeline< ^t,  ^a,  ^b>
                 (fun stream v ->
                     let initialPosition = stream.Position
-                    p1.Invoke(&stream, &v.F1)
+                    p1().Invoke(&stream, &v.F1)
                     if stream.Status = Status.Success then
                         p2.Invoke(&stream, &v.F2)
                         if stream.Status <> Status.Success then 
@@ -218,7 +289,10 @@ module Span =
         for item in span do
             result <- folder result item
         result
-        
+
+
+                
+                
 module VList = 
     open System
     open System.Collections.Generic

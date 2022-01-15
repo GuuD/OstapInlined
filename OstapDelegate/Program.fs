@@ -4,6 +4,7 @@ open System.Diagnostics
 open System.IO
 open System.Runtime.CompilerServices
 open Microsoft.FSharp.Core
+open OstapDelegate
 open OstapDelegate.InternalTypes
 open System.Runtime.InteropServices
 
@@ -12,17 +13,18 @@ open System.Runtime.InteropServices
 
 
 module Parser =        
-    let inline matchAndReturnWithEq ([<Inl>]  eq: Eq<_>) valueToMatch valueToReturn : P<_,_> = 
-        fun () ->
+    let inline matchAndReturnWithEq ([<Inl>]  eq: Eq<_>) valueToMatch valueToReturn () = 
+        
+        //fun () ->
             Parser<_,_>
-                (fun stream v ->
+                (fun stream v -> 
                     match stream.TryGetCurrentToken() with
                     | true, t when eq.Invoke(t, valueToMatch) ->
                         v <- valueToReturn
                         stream.Advance(1)
                     | _ -> stream.SignalMiss())
                 
-    let inline matchSequenceAndReturnWithEq  ([<Inl>] eq: StartsWith<_>) (seq: ReadOnlyMemory<_>) valueToReturn : P<_,_> =
+    let inline matchSequenceAndReturnWithEq error ([<Inl>] eq: StartsWith<_>) (seq: ReadOnlyMemory<_>) valueToReturn : P<_,_> =
         fun () ->
             Parser<_,_>
                 (fun stream v ->
@@ -31,7 +33,7 @@ module Parser =
                     if eq.Invoke(stream.Stream.Slice stream.Position, span) then
                         stream.Advance(length)
                         v <- valueToReturn
-                    else stream.SignalMiss())
+                    else stream.SignalMiss(error))
     let inline ret value =
         fun () -> Parser<_,_>(fun stream v -> v <- value)
 
@@ -43,8 +45,8 @@ module Parser =
                     (p()).Invoke(&stream, &vo)
                     if stream.Status = Status.Success then v <- f vo)
     
-    let inline satisfyAndReturn ([<Inl>] f: 'a -> bool) valueToReturn = 
-        fun () ->    
+    let inline satisfyAndReturn ([<Inl>] f: 'a -> bool) valueToReturn () = 
+//        fun () ->    
             (Parser<_,_>
                 (fun stream v ->
                     match stream.TryGetCurrentToken() with
@@ -154,14 +156,14 @@ module Parser =
         fun () ->
             Parser<_,_>
                 (fun stream v ->
-                    p1().Invoke(&stream, &v)
+                    (p1()).Invoke(&stream, &v)
                     if stream.Status = Status.Failure then
-                        let e1 = stream.Expectations
-                        p2().Invoke(&stream, &v)
-                        if stream.Status = Status.Failure then
-                            let e2 = stream.Expectations
-                            //stream.SignalMiss(fun () -> Choice(e1(), e2())))
-                            stream.SignalMiss())
+                        //let e1 = stream.ExpectedByPrevious
+                        (p2()).Invoke(&stream, &v))
+                        //if stream.Status = Status.Failure then
+                            //let e2 = stream.ExpectedByPrevious
+                            //stream.SignalMiss())
+                            //stream.SignalMiss())
    
     let inline (|>>) ([<Inl>] p: P<'t, 'a>) ([<Inl>] f) = map f p
     
@@ -200,9 +202,9 @@ module Parser =
                     if stream.Status = Status.Success then v <- (^a : (member ApplyTo: (^b -> ^c) -> ^d)(vo, f)))
 
             
-    let inline (<+>) ([<Inl>] p1) ([<Inl>] p2: unit -> ^b) =
+    let inline (<+>) ([<Inl>] p1: unit -> ^a) ([<Inl>] p2: unit -> ^b) =
         fun () ->
-        ((?<-) (p1()) (p2()) Unchecked.defaultof<PH>)()
+        ((?<-) (p1) (p2()) Unchecked.defaultof<PH>)()
         
     let inline (<?>) ([<Inl>] p: P<'t, 'a>) dv =
         fun () ->
@@ -259,10 +261,17 @@ module Parser =
         separated (fun (ra: ResizeArray<_>) e -> ra.Add e; ra) (ResizeArray<_>) (fun ra _ -> ra) 1 M sp p
     
     
-    let inline charAndReturn vtm vtr () = matchAndReturnWithEq (Eq<_>(=)) vtm vtr ()
+    let inline charAndReturn (vtm: char) vtr () = matchAndReturnWithEq (Eq<_>(=)) vtm vtr ()
     let inline stringAndReturn (stm: string) vtr () =
-        matchSequenceAndReturnWithEq (StartsWith(fun a b -> a.StartsWith(b))) (stm.AsMemory()) vtr ()
-    let inline ch (c: Char) = charAndReturn c () |> parse
+        matchSequenceAndReturnWithEq (ParsingError.expectedString stm) (StartsWith(fun a b -> a.StartsWith(b))) (stm.AsMemory()) vtr ()
+    let inline ch (c: Char) =
+        Parser<_,unit>(
+            fun stream v ->
+                match stream.TryGetCurrentToken() with
+                | true, t when t = c ->
+                    stream.Advance(1)
+                | _  -> stream.SignalMiss(ParsingError.expectedChar c)
+            )
     open OstapDelegate.Operators
     let inline dot () = ch '.' 
     
@@ -280,7 +289,7 @@ module Parser =
     let inline digit () =
         satisfyMap (fun c -> c >= '0' && c <= '9') (fun c -> int64 c - int64 '0') |> parse
     let inline integer () =
-        many (fun acc e -> acc * 10L + e) (fun () -> 0L) (fun i _ -> i) 1 M digit |> parse
+        many (fun acc e -> acc * 10L + e) (fun () -> 0L) (fun i _ -> i) 1 M digit ()
 
     let inline fractional () =
         dot
